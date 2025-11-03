@@ -1,7 +1,7 @@
 {
   "name": "faleproxy",
   "version": "1.0.0",
-  "description": "A proxy that replaces 'Yale' with 'Fale' in web content",
+  "description": "Faleproxy — HW8 test deployment by anayp",
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
