@@ -2,7 +2,7 @@ name: Faleproxy CI
 
 on:
   push:
-    branches: ["**"]        # all branches incl. main
+    branches: ["**"]        # run on all branches, including main
   pull_request:
     branches: ["**"]
 
@@ -25,7 +25,8 @@ jobs:
   deploy_preview:
     needs: test
     if: |
-      success() && github.event_name == 'pull_request'
+      success() &&
+      github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
