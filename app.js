@@ -6,8 +6,8 @@ const app = express();
 app.use(express.json());
 
 /**
- * Preserve the casing pattern of "Yale" → "Fale".
- * YALE → FALE, Yale → Fale, yale → fale, and mixed-case char-by-char.
+ * Preserve casing for "Yale" -> "Fale".
+ * YALE -> FALE, Yale -> Fale, yale -> fale, mixed-case char-by-char.
  */
 function yaleToFalePreserveCase(word) {
   if (word === word.toUpperCase()) return 'FALE';
@@ -23,19 +23,11 @@ function yaleToFalePreserveCase(word) {
 }
 
 /**
- * Replace ONLY when "Yale" is immediately followed by a brand keyword.
- * This ensures "no Yale references" stays unchanged.
- *
- * Brand keywords covered for HW9 tests:
- *   University | College | medical school
- *
- * We operate on text nodes only (no attributes/URLs; skip script/style).
+ * Only replace when "Yale" is part of a brand phrase:
+ *   Yale University | Yale College | Yale medical school
+ * We operate on text nodes only (skip attributes/URLs; skip script/style).
  */
-const afterKeywords = '(?:University|College|medical\\s+school)';
-const yaleBrandRegex = new RegExp(
-  `\\b(Yale)\\b(?=\\s+${afterKeywords}\\b)`,
-  'gi'
-);
+const phraseRe = /\b(Yale)\s+(University|College|medical\s+school)\b/gi;
 
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
@@ -47,11 +39,15 @@ function replaceYaleWithFaleCasePreserving(html) {
     for (const node of el.childNodes || []) {
       if (node.type !== 'text' || !node.data) continue;
 
-      const next = node.data.replace(yaleBrandRegex, (m, yaleToken) =>
-        yaleToFalePreserveCase(yaleToken)
-      );
+      // Replace all phrase occurrences within this text node
+      let changed = false;
+      let text = node.data;
+      text = text.replace(phraseRe, (match, yaleToken, rest) => {
+        changed = true;
+        return `${yaleToFalePreserveCase(yaleToken)} ${rest}`;
+      });
 
-      if (next !== node.data) node.data = next;
+      if (changed) node.data = text;
     }
   });
 
@@ -72,16 +68,13 @@ app.post('/fetch', async (req, res) => {
   }
 });
 
-// Export for tests
 module.exports = { app, replaceYaleWithFaleCasePreserving };
 
 /**
- * Keep a concrete port constant so tests can rewrite it.
- * The integration test copies this file to app.test.js and replaces the port.
+ * Keep a concrete port constant so integration test can rewrite it.
  */
 const PORT = 3001;
 
-// Only start the server if run directly (Jest imports without binding ports)
 if (require.main === module) {
   app.listen(PORT, () => console.log(`Faleproxy listening on ${PORT}`));
 }
