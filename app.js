@@ -23,13 +23,24 @@ function yaleToFalePreserveCase(word) {
 }
 
 /**
- * Replace only when the "Yale" token is immediately followed by a brand keyword:
+ * Token regex for "Yale" with brand lookahead:
+ * Replace only when the token "Yale" is immediately followed by
  *   University | College | medical school
- *
- * We operate on text nodes only (skip attributes/URLs; skip script/style).
+ * (keeps non-brand uses like "no Yale references" untouched)
  */
 const yaleBrandToken = /\b(Yale)\b(?=\s+(?:University|College|medical\s+school)\b)/gi;
 
+/**
+ * Token regex for "Yale" by itself (used ONLY for anchor text replacement).
+ */
+const yaleTokenOnly = /\b(Yale)\b/gi;
+
+/**
+ * Replace Yale→Fale in text nodes only (skip attributes/URLs; skip script/style).
+ * - Replace in brand phrases (global in all text nodes).
+ * - Additionally, replace "Yale" inside <a> ...text... </a> nodes (link labels).
+ * - Do NOT replace plain occurrences elsewhere (e.g., "no Yale references").
+ */
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
 
@@ -40,11 +51,25 @@ function replaceYaleWithFaleCasePreserving(html) {
     for (const node of el.childNodes || []) {
       if (node.type !== 'text' || !node.data) continue;
 
-      const next = node.data.replace(yaleBrandToken, (m, yaleToken) =>
-        yaleToFalePreserveCase(yaleToken)
-      );
+      let text = node.data;
+      let changed = false;
 
-      if (next !== node.data) node.data = next;
+      // 1) Brand-phrase replacement everywhere (text nodes only)
+      const brandReplaced = text.replace(yaleBrandToken, (m, yale) => {
+        changed = true;
+        return yaleToFalePreserveCase(yale);
+      });
+
+      // 2) Anchor-text replacement: if parent is <a>, also replace bare "Yale"
+      let finalText = brandReplaced;
+      if (tag === 'a') {
+        finalText = finalText.replace(yaleTokenOnly, (m, yale) => {
+          changed = true;
+          return yaleToFalePreserveCase(yale);
+        });
+      }
+
+      if (changed && finalText !== node.data) node.data = finalText;
     }
   });
 
