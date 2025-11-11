@@ -23,11 +23,12 @@ function yaleToFalePreserveCase(word) {
 }
 
 /**
- * Only replace when "Yale" is part of a brand phrase:
- *   Yale University | Yale College | Yale medical school
+ * Replace only when the "Yale" token is immediately followed by a brand keyword:
+ *   University | College | medical school
+ *
  * We operate on text nodes only (skip attributes/URLs; skip script/style).
  */
-const phraseRe = /\b(Yale)\s+(University|College|medical\s+school)\b/gi;
+const yaleBrandToken = /\b(Yale)\b(?=\s+(?:University|College|medical\s+school)\b)/gi;
 
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
@@ -39,15 +40,11 @@ function replaceYaleWithFaleCasePreserving(html) {
     for (const node of el.childNodes || []) {
       if (node.type !== 'text' || !node.data) continue;
 
-      // Replace all phrase occurrences within this text node
-      let changed = false;
-      let text = node.data;
-      text = text.replace(phraseRe, (match, yaleToken, rest) => {
-        changed = true;
-        return `${yaleToFalePreserveCase(yaleToken)} ${rest}`;
-      });
+      const next = node.data.replace(yaleBrandToken, (m, yaleToken) =>
+        yaleToFalePreserveCase(yaleToken)
+      );
 
-      if (changed) node.data = text;
+      if (next !== node.data) node.data = next;
     }
   });
 
