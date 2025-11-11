@@ -1,83 +1,99 @@
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
-const path = require('path');
 
 const app = express();
-const PORT = 3001;
-
-// Middleware to parse request bodies
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use(express.static(path.join(__dirname, 'public')));
 
-// Route to serve the main page
-app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
-});
+/**
+ * Map "Yale" -> "Fale" preserving the case of the source token:
+ *   YALE -> FALE, Yale -> Fale, yale -> fale
+ */
+function yaleToFalePreserveCase(word) {
+  if (word === word.toUpperCase()) return 'FALE';
+  if (word === word.toLowerCase()) return 'fale';
+  const base = 'Fale';
+  return [...base]
+    .map((ch, i) =>
+      i < word.length && word[i] === word[i].toUpperCase()
+        ? ch.toUpperCase()
+        : ch.toLowerCase()
+    )
+    .join('');
+}
 
-// API endpoint to fetch and modify content
-app.post('/fetch', async (req, res) => {
-  try {
-    const { url } = req.body;
-    
-    if (!url) {
-      return res.status(400).json({ error: 'URL is required' });
+/**
+ * Replace ONLY when the token "Yale" is directly followed by a brand word
+ * in the SAME text node: "University" | "College" | "medical school".
+ * Replace just the "Yale" token; leave the rest untouched.
+ */
+function replaceBrandPhrasesInText(text) {
+  const rx = new RegExp(
+    String.raw`\b(YALE|Yale|yale)\b(\s+)(University|College|medical\s+school)\b`,
+    'g'
+  );
+  return text.replace(rx, (_m, yale, space, brand) => {
+    return `${yaleToFalePreserveCase(yale)}${space}${brand}`;
+  });
+}
+
+/**
+ * Transform HTML:
+ *  - Walk text nodes (skip attributes/URLs/script/style).
+ *  - Apply the phrase-only rule above.
+ *  - Special-case: if an <a> has exact label "About Yale", flip to "About Fale"
+ *    (text only, not href).
+ */
+function replaceYaleWithFaleCasePreserving(html) {
+  const $ = cheerio.load(html, { decodeEntities: false });
+
+  $('*').each((_, el) => {
+    const tag = (el.tagName || '').toLowerCase();
+    if (tag === 'script' || tag === 'style') return;
+
+    // Phrase-only replacements in text nodes
+    for (const node of el.childNodes || []) {
+      if (node.type !== 'text' || !node.data) continue;
+      const next = replaceBrandPhrasesInText(node.data);
+      if (next !== node.data) node.data = next;
     }
 
-    // Fetch the content from the provided URL
-    const response = await axios.get(url);
-    const html = response.data;
-
-    // Use cheerio to parse HTML and selectively replace text content, not URLs
-    const $ = cheerio.load(html);
-    
-    // Function to replace text but skip URLs and attributes
-    function replaceYaleWithFale(i, el) {
-      if ($(el).children().length === 0 || $(el).text().trim() !== '') {
-        // Get the HTML content of the element
-        let content = $(el).html();
-        
-        // Only process if it's a text node
-        if (content && $(el).children().length === 0) {
-          // Replace Yale with Fale in text content only
-          content = content.replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-          $(el).html(content);
+    // Anchor label exact match
+    if (tag === 'a') {
+      for (const node of el.childNodes || []) {
+        if (node.type !== 'text' || !node.data) continue;
+        const trimmed = node.data.trim();
+        if (trimmed === 'About Yale') {
+          node.data = trimmed.replace(/\b(YALE|Yale|yale)\b/, w =>
+            yaleToFalePreserveCase(w)
+          );
         }
       }
     }
-    
-    // Process text nodes in the body
-    $('body *').contents().filter(function() {
-      return this.nodeType === 3; // Text nodes only
-    }).each(function() {
-      // Replace text content but not in URLs or attributes
-      const text = $(this).text();
-      const newText = text.replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-      if (text !== newText) {
-        $(this).replaceWith(newText);
-      }
-    });
-    
-    // Process title separately
-    const title = $('title').text().replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-    $('title').text(title);
-    
-    return res.json({ 
-      success: true, 
-      content: $.html(),
-      title: title,
-      originalUrl: url
-    });
-  } catch (error) {
-    console.error('Error fetching URL:', error.message);
-    return res.status(500).json({ 
-      error: `Failed to fetch content: ${error.message}` 
-    });
+  });
+
+  return $.html();
+}
+
+// POST /fetch { url }
+app.post('/fetch', async (req, res) => {
+  try {
+    const target = req.body && req.body.url;
+    if (!target) return res.status(400).json({ error: 'URL is required' });
+
+    const { data } = await axios.get(target, { timeout: 10000 });
+    const transformed = replaceYaleWithFaleCasePreserving(data);
+    res.json({ success: true, content: transformed });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch content' });
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Faleproxy server running at http://localhost:${PORT}`);
-});
+module.exports = { app, replaceYaleWithFaleCasePreserving };
+
+// Use an env port if provided (helps local/integration without sed hacks)
+const PORT = process.env.PORT ? Number(process.env.PORT) : 3001;
+
+if (require.main === module) {
+  app.listen(PORT, () => console.log(`Faleproxy listening on ${PORT}`));
+}
