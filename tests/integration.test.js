@@ -1,8 +1,8 @@
 const axios = require('axios');
 const cheerio = require('cheerio');
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const execAsync = promisify(exec);
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 const { sampleHtmlWithYale } = require('./test-utils');
 const nock = require('nock');
 
@@ -10,76 +10,97 @@ const nock = require('nock');
 const TEST_PORT = 3099;
 let server;
 
+// Cross-platform in-place text replacement (avoids macOS-only `sed -i ''`)
+function inplaceReplace(file, fromRegex, toStr) {
+  const p = path.resolve(file);
+  const s = fs.readFileSync(p, 'utf8');
+  const updated = s.replace(fromRegex, toStr);
+  fs.writeFileSync(p, updated);
+}
+
 describe('Integration Tests', () => {
-  // Modify the app to use a test port
   beforeAll(async () => {
-    // Mock external HTTP requests
+    // Mock external HTTP requests, but allow localhost
     nock.disableNetConnect();
     nock.enableNetConnect('127.0.0.1');
-    
-    // Create a temporary test app file
-    await execAsync('cp app.js app.test.js');
-    await execAsync(`sed -i '' 's/const PORT = 3001/const PORT = ${TEST_PORT}/' app.test.js`);
-    
+
+    // Create a temporary test app file, and swap the port to TEST_PORT
+    fs.copyFileSync(path.resolve('app.js'), path.resolve('app.test.js'));
+    inplaceReplace(
+      'app.test.js',
+      /const\s+PORT\s*=\s*\d+/g,
+      `const PORT = ${TEST_PORT}`
+    );
+
     // Start the test server
-    server = require('child_process').spawn('node', ['app.test.js'], {
+    server = spawn(process.execPath, ['app.test.js'], {
       detached: true,
-      stdio: 'ignore'
+      stdio: 'ignore',
     });
-    
+
     // Give the server time to start
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }, 10000); // Increase timeout for server startup
+    await new Promise((r) => setTimeout(r, 2000));
+  }, 15000);
 
   afterAll(async () => {
     // Kill the test server and clean up
     if (server && server.pid) {
-      process.kill(-server.pid);
+      try {
+        process.kill(-server.pid);
+      } catch (_) {
+        // ignore if already exited
+      }
     }
-    await execAsync('rm app.test.js');
+    try {
+      fs.unlinkSync(path.resolve('app.test.js'));
+    } catch (_) {
+      // ignore
+    }
     nock.cleanAll();
     nock.enableNetConnect();
   });
 
-  test('Should replace Yale with Fale in fetched content', async () => {
-    // Setup mock for example.com
-    nock('https://example.com')
-      .get('/')
-      .reply(200, sampleHtmlWithYale);
-    
-    // Make a request to our proxy app
-    const response = await axios.post(`http://localhost:${TEST_PORT}/fetch`, {
-      url: 'https://example.com/'
-    });
-    
-    expect(response.status).toBe(200);
-    expect(response.data.success).toBe(true);
-    
-    // Verify Yale has been replaced with Fale in text
-    const $ = cheerio.load(response.data.content);
-    expect($('title').text()).toBe('Fale University Test Page');
-    expect($('h1').text()).toBe('Welcome to Fale University');
-    expect($('p').first().text()).toContain('Fale University is a private');
-    
-    // Verify URLs remain unchanged
-    const links = $('a');
-    let hasYaleUrl = false;
-    links.each((i, link) => {
-      const href = $(link).attr('href');
-      if (href && href.includes('yale.edu')) {
-        hasYaleUrl = true;
-      }
-    });
-    expect(hasYaleUrl).toBe(true);
-    
-    // Verify link text is changed
-    expect($('a').first().text()).toBe('About Fale');
-  }, 10000); // Increase timeout for this test
+  test(
+    'Should replace Yale with Fale in fetched content',
+    async () => {
+      // Setup mock for example.com
+      nock('https://example.com').get('/').reply(200, sampleHtmlWithYale);
+
+      // Make a request to our proxy app
+      const response = await axios.post(`http://localhost:${TEST_PORT}/fetch`, {
+        url: 'https://example.com/',
+      });
+
+      expect(response.status).toBe(200);
+      expect(response.data.success).toBe(true);
+
+      // Verify Yale has been replaced with Fale in text
+      const $ = cheerio.load(response.data.content);
+      expect($('title').text()).toBe('Fale University Test Page');
+      expect($('h1').text()).toBe('Welcome to Fale University');
+      expect($('p').first().text()).toContain('Fale University is a private');
+
+      // Verify URLs remain unchanged
+      const links = $('a');
+      let hasYaleUrl = false;
+      links.each((i, link) => {
+        const href = $(link).attr('href');
+        if (href && href.includes('yale.edu')) {
+          hasYaleUrl = true;
+        }
+      });
+      expect(hasYaleUrl).toBe(true);
+
+      // Verify link text is changed
+      expect($('a').first().text()).toBe('About Fale');
+    },
+    15000
+  );
 
   test('Should handle invalid URLs', async () => {
     try {
       await axios.post(`http://localhost:${TEST_PORT}/fetch`, {
-        url: 'not-a-valid-url'
+        url: 'not-a-valid-url',
       });
       // Should not reach here
       expect(true).toBe(false);

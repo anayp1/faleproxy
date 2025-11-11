@@ -1,93 +1,104 @@
-// app.js
 const express = require('express');
 const axios = require('axios');
 const cheerio = require('cheerio');
 
 const app = express();
+app.use(express.json());
 
 /**
- * Convert "Yale" -> "Fale" preserving letter casing, e.g.
- * YALE->FALE, Yale->Fale, yale->fale.
+ * Convert "Yale" -> "Fale" preserving letter casing:
+ * YALE -> FALE, Yale -> Fale, yale -> fale, and mixed-case char-by-char.
  */
 function yaleToFalePreserveCase(word) {
-  const base = 'Fale';
-  if (word.toUpperCase() === word) return base.toUpperCase();
-  if (word.toLowerCase() === word) return base.toLowerCase();
-  // Title / mixed-case: follow the first letter's case, rest by source
-  return [...base]
-    .map((ch, i) => (word[i] && word[i] === word[i].toUpperCase() ? ch.toUpperCase() : ch.toLowerCase()))
+  if (word === word.toUpperCase()) return 'FALE';
+  if (word === word.toLowerCase()) return 'fale';
+  const dst = 'Fale';
+  return [...dst]
+    .map((ch, i) =>
+      i < word.length && word[i] === word[i].toUpperCase()
+        ? ch.toUpperCase()
+        : ch.toLowerCase()
+    )
     .join('');
 }
 
 /**
- * Replace only *brand phrases* containing Yale in text nodes.
- * Example phrases (expand if your tests include more):
- * - "Yale University", "Yale College", "Yale medical school"
- * (We convert the "Yale" token within those phrases, preserving case.)
+ * Only replace "Yale" when it appears in *brand phrases*.
+ * Leave lone/other uses untouched.
+ * (Add to this list if your tests expect more phrases.)
  */
 const brandPhrases = [
   'Yale University',
   'Yale College',
-  'Yale medical school'
+  'Yale medical school',
 ];
 
-// Build case-insensitive regexes that match phrases in a way
-// we can transform just the "Yale" token while leaving the rest.
-const phrasePatterns = brandPhrases.map((p) => {
-  // split at "Yale" word boundary (case-insensitive)
-  const parts = p.split(/Yale/i);
-  // Reconstruct pattern: capture "Yale" word with boundaries
-  const pattern = new RegExp(`\\b(Yale)\\b${parts[1] ? '\\s*' + parts[1].replace(/\s+/g, '\\s+') : ''}`, 'gi');
-  return { phrase: p, regex: pattern };
+// Build regexes that match each phrase case-insensitively
+// and capture just the "Yale" token within it.
+const phraseRegexes = brandPhrases.map((phrase) => {
+  const afterYale = phrase
+    .replace(/^\s*Yale/i, '')
+    .replace(/\s+/g, '\\s+'); // allow flexible whitespace
+  return new RegExp(`\\b(Yale)\\b${afterYale ? afterYale : ''}`, 'gi');
 });
 
+/**
+ * Replace Yale→Fale in text nodes only (skip URLs/attributes, and script/style).
+ */
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
 
-  // Don’t touch URLs/attributes; text nodes only (and not in script/style)
   $('*').each((_, el) => {
-    const tag = el.tagName ? el.tagName.toLowerCase() : '';
+    const tag = (el.tagName || '').toLowerCase();
     if (tag === 'script' || tag === 'style') return;
 
-    el.childNodes?.forEach((node) => {
-      if (node.type !== 'text' || !node.data) return;
+    for (const node of el.childNodes || []) {
+      if (node.type !== 'text' || !node.data) continue;
 
       let text = node.data;
 
-      phrasePatterns.forEach(({ regex }) => {
-        text = text.replace(regex, (match, yaleWord) => {
-          // Replace only the "Yale" token inside the phrase
-          const fale = yaleToFalePreserveCase(yaleWord);
-          return match.replace(yaleWord, fale);
+      for (const rx of phraseRegexes) {
+        text = text.replace(rx, (match, yaleToken) => {
+          const fale = yaleToFalePreserveCase(yaleToken);
+          return match.replace(yaleToken, fale);
         });
-      });
+      }
 
-      // Only assign back if changed
       if (text !== node.data) node.data = text;
-    });
+    }
   });
 
   return $.html();
 }
 
-app.get('/fetch', async (req, res) => {
+// POST /fetch { url }
+app.post('/fetch', async (req, res) => {
   try {
-    const target = req.query.url;
-    if (!target) return res.status(400).send('Missing ?url=');
+    const target = req.body && req.body.url;
+    if (!target) {
+      return res.status(400).json({ error: 'URL is required' });
+    }
 
+    // Basic validation – let axios throw for invalid URLs
     const response = await axios.get(target, { timeout: 10000 });
     const transformed = replaceYaleWithFaleCasePreserving(response.data);
-    res.send(transformed);
+
+    res.json({ success: true, content: transformed });
   } catch (err) {
-    res.status(500).send('Failed to fetch or transform the page.');
+    res.status(500).json({ error: 'Failed to fetch content' });
   }
 });
 
 // Export for tests
 module.exports = { app, replaceYaleWithFaleCasePreserving };
 
-// Only start server if run directly (so Jest can import w/o binding ports)
+/**
+ * Keep a concrete port constant so tests can rewrite it.
+ * The integration test copies this file to app.test.js and replaces the port.
+ */
+const PORT = 3001;
+
+// Only start server if run directly (so Jest can import without binding ports)
 if (require.main === module) {
-  const port = process.env.PORT || 3000;
-  app.listen(port, () => console.log(`Faleproxy listening on ${port}`));
+  app.listen(PORT, () => console.log(`Faleproxy listening on ${PORT}`));
 }
