@@ -23,23 +23,30 @@ function yaleToFalePreserveCase(word) {
 }
 
 /**
- * Token regex for "Yale" with brand lookahead:
- * Replace only when the token "Yale" is immediately followed by
- *   University | College | medical school
- * (keeps non-brand uses like "no Yale references" untouched)
+ * Full-phrase regexes:
+ * We match the entire phrase but only mutate the captured Yale token.
+ * This guarantees "no Yale references" stays untouched.
  */
-const yaleBrandToken = /\b(Yale)\b(?=\s+(?:University|College|medical\s+school)\b)/gi;
+const phraseRegexes = [
+  // Yale University
+  /\b(Yale)(\s+University)\b/gi,
+  // Yale College
+  /\b(Yale)(\s+College)\b/gi,
+  // Yale medical school (allow flexible whitespace between "medical" and "school")
+  /\b(Yale)(\s+medical\s+school)\b/gi,
+];
 
 /**
- * Token regex for "Yale" by itself (used ONLY for anchor text replacement).
+ * Bare "Yale" token — used ONLY for <a> tag text (link labels),
+ * never for general text nodes.
  */
 const yaleTokenOnly = /\b(Yale)\b/gi;
 
 /**
  * Replace Yale→Fale in text nodes only (skip attributes/URLs; skip script/style).
- * - Replace in brand phrases (global in all text nodes).
- * - Additionally, replace "Yale" inside <a> ...text... </a> nodes (link labels).
- * - Do NOT replace plain occurrences elsewhere (e.g., "no Yale references").
+ * - Replace within brand phrases anywhere in text nodes.
+ * - Additionally, replace bare "Yale" inside <a> tag text nodes (link labels).
+ * - Do NOT replace plain "Yale" elsewhere (e.g., "no Yale references").
  */
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
@@ -54,22 +61,23 @@ function replaceYaleWithFaleCasePreserving(html) {
       let text = node.data;
       let changed = false;
 
-      // 1) Brand-phrase replacement everywhere (text nodes only)
-      const brandReplaced = text.replace(yaleBrandToken, (m, yale) => {
-        changed = true;
-        return yaleToFalePreserveCase(yale);
-      });
+      // 1) Replace the Yale token only inside the full brand phrases
+      for (const rx of phraseRegexes) {
+        text = text.replace(rx, (match, yaleToken, rest) => {
+          changed = true;
+          return `${yaleToFalePreserveCase(yaleToken)}${rest}`;
+        });
+      }
 
-      // 2) Anchor-text replacement: if parent is <a>, also replace bare "Yale"
-      let finalText = brandReplaced;
+      // 2) For anchor text only, also replace a bare "Yale" token
       if (tag === 'a') {
-        finalText = finalText.replace(yaleTokenOnly, (m, yale) => {
+        text = text.replace(yaleTokenOnly, (m, yale) => {
           changed = true;
           return yaleToFalePreserveCase(yale);
         });
       }
 
-      if (changed && finalText !== node.data) node.data = finalText;
+      if (changed && text !== node.data) node.data = text;
     }
   });
 
@@ -93,7 +101,7 @@ app.post('/fetch', async (req, res) => {
 module.exports = { app, replaceYaleWithFaleCasePreserving };
 
 /**
- * Keep a concrete port constant so integration test can rewrite it.
+ * Fixed port so the integration test can rewrite it in a temp copy.
  */
 const PORT = 3001;
 
