@@ -19,72 +19,18 @@ function yaleToFalePreserveCase(word) {
     .join('');
 }
 
-/**
- * Replace only when a Yale token is immediately followed by:
- *   University | College | medical school
- * Operates **within one text node** to avoid crossing element boundaries.
- */
-function replaceBrandPhrasesInText(text) {
-  // tokens we accept after "Yale"
-  const afterWords = ['university', 'college', 'medical school'];
-
-  // scan the text manually for word "Yale" (any case)
-  const yaleWordRe = /\b([Yy][Aa][Ll][Ee])\b/g;
-
-  let out = '';
-  let lastIndex = 0;
-  let m;
-
-  while ((m = yaleWordRe.exec(text)) !== null) {
-    const start = m.index;
-    const end = yaleWordRe.lastIndex; // end of "Yale" token
-    const yaleToken = m[1]; // preserves original case
-
-    // Look ahead in the same text node
-    const rest = text.slice(end); // after "Yale"
-    // Allow any amount of whitespace before the next word(s)
-    const ws = rest.match(/^\s+/);
-    const afterStart = ws ? ws[0].length : 0;
-    const after = rest.slice(afterStart);
-
-    // Check for allowed phrases (case-insensitive)
-    let matchesPhrase = false;
-    for (const aw of afterWords) {
-      if (after.toLowerCase().startsWith(aw)) {
-        // Also ensure we end on a word boundary (e.g., "University" not "UniversityX")
-        const boundaryChar = after.charAt(aw.length);
-        if (!boundaryChar || /\b/.test(boundaryChar)) {
-          matchesPhrase = true;
-          break;
-        }
-      }
-    }
-
-    // Emit previous untouched chunk
-    out += text.slice(lastIndex, start);
-
-    if (matchesPhrase) {
-      // Replace just the Yale token with case-preserved "Fale"
-      out += yaleToFalePreserveCase(yaleToken);
-    } else {
-      // Leave it exactly as-is (e.g., "no Yale references")
-      out += yaleToken;
-    }
-
-    lastIndex = end;
-  }
-
-  // Append the remaining tail
-  out += text.slice(lastIndex);
-  return out;
+// Build fresh regexes each time (avoid global lastIndex issues)
+function buildPhraseRegexes() {
+  return [
+    // Yale University
+    new RegExp(String.raw`\b(Yale)(\s+University)\b`, 'gi'),
+    // Yale College
+    new RegExp(String.raw`\b(Yale)(\s+College)\b`, 'gi'),
+    // Yale medical school (flex whitespace)
+    new RegExp(String.raw`\b(Yale)(\s+medical\s+school)\b`, 'gi'),
+  ];
 }
 
-/**
- * Replace only:
- *  - brand phrases in any text node (by scanning tokens)
- *  - a bare "Yale" in anchor text when the full label is exactly "About Yale"
- * Never touch attributes/URLs or script/style.
- */
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
 
@@ -92,20 +38,33 @@ function replaceYaleWithFaleCasePreserving(html) {
     const tag = (el.tagName || '').toLowerCase();
     if (tag === 'script' || tag === 'style') return;
 
-    // 1) Brand phrases in all text nodes
+    // 1) Replace brand phrases in text nodes only
     for (const node of el.childNodes || []) {
       if (node.type !== 'text' || !node.data) continue;
-      const replaced = replaceBrandPhrasesInText(node.data);
-      if (replaced !== node.data) node.data = replaced;
+
+      let text = node.data;
+      let changed = false;
+
+      const phraseRegexes = buildPhraseRegexes(); // fresh per node
+      for (const rx of phraseRegexes) {
+        // Reset just in case (paranoia, though fresh regexes start at 0)
+        rx.lastIndex = 0;
+        text = text.replace(rx, (match, yaleToken, rest) => {
+          changed = true;
+          return `${yaleToFalePreserveCase(yaleToken)}${rest}`;
+        });
+      }
+
+      if (changed) node.data = text;
     }
 
-    // 2) Anchor label “About Yale” -> “About Fale” (exact label)
+    // 2) Replace anchor label exactly "About Yale" -> "About Fale" (text only)
     if (tag === 'a') {
       for (const node of el.childNodes || []) {
         if (node.type !== 'text' || !node.data) continue;
-        const trimmed = node.data.trim();
-        if (trimmed === 'About Yale') {
-          node.data = trimmed.replace(/\b(YALE|Yale|yale)\b/, (w) =>
+        const label = node.data.trim();
+        if (label === 'About Yale') {
+          node.data = label.replace(/\b(YALE|Yale|yale)\b/, (w) =>
             yaleToFalePreserveCase(w)
           );
         }
