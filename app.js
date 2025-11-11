@@ -19,23 +19,24 @@ function yaleToFalePreserveCase(word) {
     .join('');
 }
 
-// Full-phrase matches: only change the "Yale" token when followed by these
+/**
+ * We only change the Yale token inside these exact phrases:
+ *   Yale University | Yale College | Yale medical school
+ * We match the whole phrase but only mutate the (Yale) capture.
+ */
 const phraseRegexes = [
   /\b(Yale)(\s+University)\b/gi,
   /\b(Yale)(\s+College)\b/gi,
   /\b(Yale)(\s+medical\s+school)\b/gi,
 ];
 
-// Anchor label literals we want to transform (integration test checks the first one)
-const anchorLabelLiterals = [
-  'About Yale',
-];
+// Anchor label that should flip “Yale” -> “Fale” (exact text match)
+const exactAnchorLabels = new Set(['About Yale']);
 
-// Apply replacements ONLY in the allowed places
 function replaceYaleWithFaleCasePreserving(html) {
   const $ = cheerio.load(html, { decodeEntities: false });
 
-  // 1) Replace brand phrases in text nodes (not attributes)
+  // 1) Replace within brand phrases in text nodes only
   $('*').each((_, el) => {
     const tag = (el.tagName || '').toLowerCase();
     if (tag === 'script' || tag === 'style') return;
@@ -57,21 +58,16 @@ function replaceYaleWithFaleCasePreserving(html) {
     }
   });
 
-  // 2) Replace specific anchor labels in <a> text only (NOT hrefs)
+  // 2) Replace bare “Yale” inside <a> labels ONLY when the entire label equals "About Yale"
   $('a').each((_, a) => {
     const children = a.childNodes || [];
     for (const node of children) {
       if (node.type !== 'text' || !node.data) continue;
 
-      let text = node.data;
-      anchorLabelLiterals.forEach((label) => {
-        // case-sensitive literal for safety (can add variants if needed)
-        if (text.includes(label)) {
-          // replace just the "Yale" token in the literal
-          text = text.replace(/\b(Yale)\b/g, (m, yale) => yaleToFalePreserveCase(yale));
-        }
-      });
-      node.data = text;
+      const label = node.data.trim();
+      if (!exactAnchorLabels.has(label)) continue; // exact match only
+
+      node.data = label.replace(/\b(Yale)\b/g, (m, yale) => yaleToFalePreserveCase(yale));
     }
   });
 
@@ -84,8 +80,8 @@ app.post('/fetch', async (req, res) => {
     const target = req.body && req.body.url;
     if (!target) return res.status(400).json({ error: 'URL is required' });
 
-    const response = await axios.get(target, { timeout: 10000 });
-    const transformed = replaceYaleWithFaleCasePreserving(response.data);
+    const { data } = await axios.get(target, { timeout: 10000 });
+    const transformed = replaceYaleWithFaleCasePreserving(data);
     res.json({ success: true, content: transformed });
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch content' });
