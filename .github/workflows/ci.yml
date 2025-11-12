@@ -77,6 +77,7 @@ jobs:
       - name: Pull Vercel env (production)
         run: vercel pull --yes --environment=production --token=$VERCEL_TOKEN
       - name: Build
-        run: vercel build --token=$VERCEL_TOKEN
+        # THIS LINE HAS BEEN FIXED
+        run: vercel build --prod --token=$VERCEL_TOKEN
       - name: Deploy (production)
         run: vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN
