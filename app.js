@@ -16,6 +16,21 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+/**
+ * Replaces all occurrences of "yale" with "fale" while preserving the original case.
+ * @param {string} text The input text.
+ * @returns {string} The modified text.
+ */
+function yaleToFale(text) {
+  // Use a regex with word boundaries (\b) to only replace the whole word "yale"
+  // The 'gi' flags make it global and case-insensitive.
+  return text.replace(/\byale\b/gi, (match) => {
+    if (match === 'YALE') return 'FALE';
+    if (match === 'Yale') return 'Fale';
+    return 'fale'; // for 'yale'
+  });
+}
+
 // API endpoint to fetch and modify content
 app.post('/fetch', async (req, res) => {
   try {
@@ -25,42 +40,17 @@ app.post('/fetch', async (req, res) => {
       return res.status(400).json({ error: 'URL is required' });
     }
 
-    // Fetch the content from the provided URL
     const response = await axios.get(url);
     const html = response.data;
-
-    // Use cheerio to parse HTML and selectively replace text content, not URLs
     const $ = cheerio.load(html);
     
-    // Function to replace text but skip URLs and attributes
-    function replaceYaleWithFale(i, el) {
-      if ($(el).children().length === 0 || $(el).text().trim() !== '') {
-        // Get the HTML content of the element
-        let content = $(el).html();
-        
-        // Only process if it's a text node
-        if (content && $(el).children().length === 0) {
-          // Replace Yale with Fale in text content only
-          content = content.replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-          $(el).html(content);
-        }
-      }
-    }
-    
-    // Process text nodes in the body
-    $('body *').contents().filter(function() {
-      return this.nodeType === 3; // Text nodes only
-    }).each(function() {
-      // Replace text content but not in URLs or attributes
-      const text = $(this).text();
-      const newText = text.replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
-      if (text !== newText) {
-        $(this).replaceWith(newText);
-      }
+    // Process text nodes throughout the document
+    $('body').find('*').addBack().contents().filter((i, el) => el.type === 'text').each((i, el) => {
+      el.nodeValue = yaleToFale(el.nodeValue);
     });
     
-    // Process title separately
-    const title = $('title').text().replace(/Yale/g, 'Fale').replace(/yale/g, 'fale');
+    // Process the title separately
+    const title = yaleToFale($('title').text());
     $('title').text(title);
     
     return res.json({ 
@@ -77,7 +67,12 @@ app.post('/fetch', async (req, res) => {
   }
 });
 
-// Start the server
-app.listen(PORT, () => {
-  console.log(`Faleproxy server running at http://localhost:${PORT}`);
-});
+// Start the server only if the file is run directly (not when imported for tests)
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`Faleproxy server running at http://localhost:${PORT}`);
+  });
+}
+
+// Export the app for testing purposes
+module.exports = app;
